@@ -3,8 +3,6 @@
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
-#pragma clang diagnostic push
-#pragma ide diagnostic ignored "MemoryLeak"
 void* CARR_array_alloc(size_t elem_size, size_t capacity) {
     CARR_array_t *pvec = malloc(elem_size * capacity + offsetof(CARR_array_t, data));
     if (pvec == NULL) {
@@ -20,7 +18,8 @@ void* CARR_array_realloc(CARR_array_t* vec, size_t new_capacity) {
     if (vec->capacity == new_capacity) {
         return vec->data;
     }
-    CARR_array_t* new_vec = (CARR_array_t*)(CARR_array_alloc(vec->elem_size, new_capacity) - offsetof(CARR_array_t, data));
+    CARR_array_t* new_vec =
+            (CARR_array_t*)((char*)CARR_array_alloc(vec->elem_size, new_capacity) - offsetof(CARR_array_t, data));
     if (new_vec == NULL) {
         return NULL;
     }
@@ -31,5 +30,3 @@ void* CARR_array_realloc(CARR_array_t* vec, size_t new_capacity) {
     free(vec);
     return new_vec->data;
 }
-
-#pragma clang diagnostic pop

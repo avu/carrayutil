@@ -11,4 +11,5 @@ add_executable(vkutest vkutest.c
 target_link_libraries(vkutest vkutils)
 add_test(NAME vec_int_test COMMAND vkutest vec_int)
 add_test(NAME vec_pchar_test COMMAND vkutest vec_pchar)
-add_test(NAME vec_srink_to_fit COMMAND vkutest vec_srink_to_fit)
+add_test(NAME vec_shrink_to_fit COMMAND vkutest vec_shrink_to_fit)
+add_test(NAME vec_expand COMMAND vkutest vec_expand)

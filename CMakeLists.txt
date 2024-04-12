@@ -4,12 +4,12 @@ enable_testing()
 
 set(CMAKE_C_STANDARD 17)
 
-add_library(vkutils STATIC VKUtils.c)
+add_library(vkutils STATIC CArrayUtil.c)
 
-add_executable(vkutest vkutest.c
-        vkutest.c)
+add_executable(vkutest carrtest.c
+        carrtest.c)
 target_link_libraries(vkutest vkutils)
-add_test(NAME vec_int_test COMMAND vkutest vec_int)
-add_test(NAME vec_pchar_test COMMAND vkutest vec_pchar)
-add_test(NAME vec_shrink_to_fit COMMAND vkutest vec_shrink_to_fit)
-add_test(NAME vec_expand COMMAND vkutest vec_expand)
+add_test(NAME array_int_test COMMAND vkutest array_int)
+add_test(NAME array_pchar_test COMMAND vkutest array_pchar)
+add_test(NAME array_shrink_to_fit COMMAND vkutest array_shrink_to_fit)
+add_test(NAME array_expand COMMAND vkutest array_expand)

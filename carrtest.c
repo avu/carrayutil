@@ -170,7 +170,7 @@ void test_ring_buffer_null_safe() {
     if (RING_BUFFER_CAPACITY(b) != 0) exit(1);
     RING_BUFFER_FREE(b);
 
-    RING_BUFFER_PUSH(b, "test");
+    RING_BUFFER_PUSH_BACK(b, "test");
     if (RING_BUFFER_SIZE(b) != 1) exit(1);
     if (RING_BUFFER_CAPACITY(b) < 1) exit(1);
 
@@ -186,27 +186,27 @@ void test_ring_buffer_wrap() {
     int write = 0;
     for (int i = 0; i < EXPAND_COUNT; i++) {
         for (int j = 0; j < INNER_COUNT; j++) {
-            RING_BUFFER_PUSH(b, write);
+            RING_BUFFER_PUSH_BACK(b, write);
             write++;
-            int* value = RING_BUFFER_PEEK(b);
+            int* value = RING_BUFFER_FRONT(b);
             if (value == NULL) exit(1);
             if (*value != read) exit(1);
             read++;
-            RING_BUFFER_POP(b);
+            RING_BUFFER_POP_FRONT(b);
         }
-        RING_BUFFER_PUSH(b, write);
+        RING_BUFFER_PUSH_BACK(b, write);
         write++;
     }
     if (RING_BUFFER_SIZE(b) != EXPAND_COUNT) exit(1);
 
     for (int i = 0; i < EXPAND_COUNT; i++) {
-        int* value = RING_BUFFER_PEEK(b);
+        int* value = RING_BUFFER_FRONT(b);
         if (value == NULL) exit(1);
         if (*value != read) exit(1);
         read++;
-        RING_BUFFER_POP(b);
+        RING_BUFFER_POP_FRONT(b);
     }
-    if (RING_BUFFER_PEEK(b) != NULL) exit(1);
+    if (RING_BUFFER_FRONT(b) != NULL) exit(1);
     if (RING_BUFFER_SIZE(b) != 0) exit(1);
 
     RING_BUFFER_FREE(b);

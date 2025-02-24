@@ -5,11 +5,16 @@ enable_testing()
 set(CMAKE_C_STANDARD 17)
 
 add_library(vkutils STATIC CArrayUtil.c)
+target_include_directories(vkutils PUBLIC .)
 
-add_executable(carrtest carrtest.c carrtest.c)
+add_executable(carrtest
+        test/test.c
+        test/test_array.c
+        test/test_ring_buffer.c
+        test/test_alloc.c)
 
 target_link_libraries(carrtest vkutils)
-add_test(NAME array_int_test COMMAND carrtest array_int)
-add_test(NAME array_pchar_test COMMAND carrtest array_pchar)
-add_test(NAME array_shrink_to_fit COMMAND carrtest array_shrink_to_fit)
-add_test(NAME array_expand COMMAND carrtest array_expand)
+add_test(NAME / COMMAND carrtest)
+add_test(NAME array COMMAND carrtest array)
+add_test(NAME ring_buffer COMMAND carrtest ring_buffer)
+add_test(NAME alloc COMMAND carrtest alloc)

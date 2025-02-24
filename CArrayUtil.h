@@ -3,11 +3,13 @@
 
 #include <malloc.h>
 #include <stdalign.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 // C_ARRAY_UTIL_ALLOCATION_FAILED is called when allocation fails.
 // Default implementation calls abort().
 // Functions that can call C_ARRAY_UTIL_ALLOCATION_FAILED explicitly state
-// this in the documentation. Functions with *_TRY_* return NULL on failure.
+// this in the documentation. Functions with *_TRY_* keep the data structure unchanged.
 #ifndef C_ARRAY_UTIL_ALLOCATION_FAILED
 #include <stdlib.h>
 #define C_ARRAY_UTIL_ALLOCATION_FAILED() abort()
@@ -15,9 +17,15 @@
 
 // === Allocation helpers ===
 
+#define CARR_MIN(a,b) (((a)<(b))?(a):(b))
 #define CARR_MAX(a,b) (((a)>(b))?(a):(b))
 
-#define CARR_REALLOC(FUNC, P, CAPACITY) FUNC((P), alignof((P)[0]), sizeof((P)[0]), CAPACITY)
+static inline bool CARR_handle_alloc(bool CARR_result, bool CARR_force) {
+    if (CARR_result || !CARR_force) return CARR_result;
+    C_ARRAY_UTIL_ALLOCATION_FAILED();
+    return false;
+}
+static inline void consume(const void* value) {}
 
 // === Arrays ===
 
@@ -27,49 +35,91 @@
 #ifndef ARRAY_DEFAULT_CAPACITY
 #define ARRAY_DEFAULT_CAPACITY 10
 #endif
+
 typedef struct {
     size_t size;
     size_t capacity;
-    char data[];
 } CARR_array_t;
-void* CARR_array_realloc(void* old_data, size_t element_alignment, size_t element_size, size_t new_capacity);
-// NULL unsafe!
-#define ARRAY_T(P) ((CARR_array_t*)((char*)(P) - offsetof(CARR_array_t, data)))
+
+bool CARR_array_realloc(void** handle, size_t element_alignment, size_t element_size, size_t new_capacity);
+
+#define CARR_ARRAY_T(P) ((CARR_array_t*)(P) - 1) // NULL unsafe!
+
+static inline void* CARR_array_alloc(size_t element_alignment, size_t element_size, size_t new_capacity) {
+    void* data = NULL;
+    CARR_array_realloc(&data, element_alignment, element_size, new_capacity);
+    return data;
+}
+
+static inline bool CARR_array_ensure_capacity(void** handle, size_t alignment, size_t size,
+                                              size_t new_capacity, bool force) {
+    void* data = *handle;
+    if (new_capacity > (data == NULL ? 0 : CARR_ARRAY_T(data)->capacity)) {
+        return CARR_handle_alloc(CARR_array_realloc(handle, alignment, size, new_capacity), force);
+    }
+    return true;
+}
+
+static inline bool CARR_array_resize(void** handle, size_t alignment, size_t size, size_t new_size, bool force) {
+    if (CARR_array_ensure_capacity(handle, alignment, size, new_size, force)) {
+        void* data = *handle;
+        if (data != NULL) CARR_ARRAY_T(data)->size = new_size;
+        return true;
+    }
+    return false;
+}
+
+static inline void CARR_array_push_back(void** handle, size_t alignment, size_t size) {
+    void* data = *handle;
+    if (data == NULL || CARR_ARRAY_T(data)->size >= CARR_ARRAY_T(data)->capacity) {
+        size_t new_capacity = data == NULL ? ARRAY_DEFAULT_CAPACITY : ARRAY_CAPACITY_GROW(CARR_ARRAY_T(data)->size);
+        if (!CARR_handle_alloc(CARR_array_realloc(handle, alignment, size, new_capacity), true)) return;
+        data = *handle; // assert data != NULL
+    }
+    CARR_ARRAY_T(data)->size++;
+}
+
+/**
+ * Dynamic array declaration, e.g. ARRAY(int) my_array = NULL;
+ * @param TYPE type of the array element.
+ */
+#define ARRAY(TYPE) TYPE*
 
 /**
  * Allocate array. Returns NULL on allocation failure.
  * @param T type of elements
  * @param CAPACITY capacity of the array
+ * @return pointer to the allocated array, or NULL
  */
-#define ARRAY_ALLOC(T, CAPACITY) (T*)CARR_array_realloc(NULL, alignof(T), sizeof(T), CAPACITY)
+#define ARRAY_ALLOC(T, CAPACITY) ((T*)CARR_array_alloc(alignof(T), sizeof(T), CAPACITY))
 
 /**
- * @param P pointer to the first data element of the array
+ * @param P array
  * @return size of the array
  */
-#define ARRAY_SIZE(P) ((P) == NULL ? (size_t) 0 : (ARRAY_T(P))->size)
+#define ARRAY_SIZE(P) ((P) == NULL ? (size_t) 0 : (CARR_ARRAY_T(P))->size)
 
 /**
- * @param P pointer to the first data element of the array
+ * @param P array
  * @return capacity of the array
  */
-#define ARRAY_CAPACITY(P) ((P) == NULL ? (size_t) 0 : (ARRAY_T(P))->capacity)
+#define ARRAY_CAPACITY(P) ((P) == NULL ? (size_t) 0 : (CARR_ARRAY_T(P))->capacity)
 
 /**
- * @param P pointer to the first data element of the array
- * @return last element in the array
+ * @param P array
+ * @return dereferenced pointer to the last element in the array
  */
 #define ARRAY_LAST(P) ((P)[ARRAY_SIZE(P) - 1])
 
 /**
  * Deallocate the vector
- * @param P pointer to the first data element of the array
+ * @param P array
  */
-#define ARRAY_FREE(P) CARR_REALLOC(CARR_array_realloc, (P), 0)
+#define ARRAY_FREE(P) ((void)CARR_array_realloc((void**)&(P), alignof(*(P)), sizeof(*(P)), 0))
 
 /**
  * Apply function to the array elements
- * @param P pointer to the first data element of the array
+ * @param P array
  * @param F function to apply
  */
 #define ARRAY_APPLY(P, F) do {                                   \
@@ -78,7 +128,7 @@ void* CARR_array_realloc(void* old_data, size_t element_alignment, size_t elemen
 
 /**
  * Apply function to the array elements, passing pointer to an element as first parameter
- * @param P pointer to the first data element of the array
+ * @param P array
  * @param F function to apply
  */
 #define ARRAY_APPLY_LEADING(P, F, ...) do {                                   \
@@ -87,7 +137,7 @@ void* CARR_array_realloc(void* old_data, size_t element_alignment, size_t elemen
 
 /**
  * Apply function to the array elements, passing pointer to an element as last parameter
- * @param P pointer to the first data element of the array
+ * @param P array
  * @param F function to apply
  */
 #define ARRAY_APPLY_TRAILING(P, F, ...) do {                                  \
@@ -96,74 +146,63 @@ void* CARR_array_realloc(void* old_data, size_t element_alignment, size_t elemen
 
 /**
  * Ensure array capacity. Array is implicitly initialized when necessary.
- * On allocation failure, array is unchanged.
- * @param P pointer to the first data element of the array
+ * On allocation failure, array is left unchanged.
+ * @param P array
  * @param CAPACITY required capacity of the array
+ * @return true if the operation succeeded
  */
-#define ARRAY_TRY_ENSURE_CAPACITY(P, CAPACITY) do {                                      \
-     (P) = CARR_REALLOC(CARR_array_realloc, (P), CARR_MAX(ARRAY_CAPACITY(P), CAPACITY)); \
-} while(0)
+#define ARRAY_TRY_ENSURE_CAPACITY(P, CAPACITY) \
+    CARR_array_ensure_capacity((void**)&(P), alignof(*(P)), sizeof(*(P)), (CAPACITY), false)
 
 /**
  * Ensure array capacity. Array is implicitly initialized when necessary.
  * On allocation failure, C_ARRAY_UTIL_ALLOCATION_FAILED is called.
- * @param P pointer to the first data element of the array
+ * @param P array
  * @param CAPACITY required capacity of the array
  */
-#define ARRAY_ENSURE_CAPACITY(P, CAPACITY) do { \
-    ARRAY_TRY_ENSURE_CAPACITY(P, CAPACITY);     \
-    if (ARRAY_CAPACITY(P) < (CAPACITY))         \
-        C_ARRAY_UTIL_ALLOCATION_FAILED();       \
-} while(0)
+#define ARRAY_ENSURE_CAPACITY(P, CAPACITY) \
+    ((void)CARR_array_ensure_capacity((void**)&(P), alignof(*(P)), sizeof(*(P)), (CAPACITY), true))
 
 /**
  * Shrink capacity of the array to its size.
- * On allocation failure, array is unchanged.
- * @param P pointer to the first data element of the array
+ * On allocation failure, array is left unchanged.
+ * @param P array
+ * @return the array
+ * @return true if the operation succeeded
  */
-#define ARRAY_SHRINK_TO_FIT(P) do {                             \
-    (P) = CARR_REALLOC(CARR_array_realloc, (P), ARRAY_SIZE(P)); \
-} while(0)
+#define ARRAY_SHRINK_TO_FIT(P) CARR_array_realloc((void**)&(P), alignof(*(P)), sizeof(*(P)), ARRAY_SIZE(P))
 
 /**
  * Resize an array. Array is implicitly initialized when necessary.
- * On allocation failure, array is unchanged.
- * @param P pointer to the first data element of the array
+ * On allocation failure, array is left unchanged.
+ * @param P array
  * @param SIZE required size of the array
+ * @return true if the operation succeeded
  */
-#define ARRAY_TRY_RESIZE(P, SIZE) do {            \
-    ARRAY_TRY_ENSURE_CAPACITY(P, SIZE);           \
-    if ((P) != NULL && ARRAY_CAPACITY(P) >= SIZE) \
-        ARRAY_T(P)->size = (SIZE);                \
-} while(0)
+#define ARRAY_TRY_RESIZE(P, SIZE) \
+    CARR_array_resize((void**)&(P), alignof(*(P)), sizeof(*(P)), (SIZE), false)
 
 /**
  * Resize an array. Array is implicitly initialized when necessary.
  * On allocation failure, C_ARRAY_UTIL_ALLOCATION_FAILED is called.
- * @param P pointer to the first data element of the array
+ * @param P array
  * @param SIZE required size of the array
  */
-#define ARRAY_RESIZE(P, SIZE) do {        \
-    ARRAY_TRY_RESIZE(P, SIZE);            \
-    if (ARRAY_SIZE(P) != (SIZE))          \
-        C_ARRAY_UTIL_ALLOCATION_FAILED(); \
-} while(0)
+#define ARRAY_RESIZE(P, SIZE) \
+    ((void)CARR_array_resize((void**)&(P), alignof(*(P)), sizeof(*(P)), (SIZE), true))
 
 /**
  * Add element to the end of the array. Array is implicitly initialized when necessary.
  * On allocation failure, C_ARRAY_UTIL_ALLOCATION_FAILED is called.
- * @param P pointer to the first data element of the array
+ * @param P array
+ * @return dereferenced pointer to the inserted element
  */
-#define ARRAY_PUSH_BACK(P, ...) do {                                               \
-    if (ARRAY_SIZE(P) >= ARRAY_CAPACITY(P)) {                                      \
-         (P) = CARR_REALLOC(CARR_array_realloc, (P), (P) == NULL ?                 \
-                ARRAY_DEFAULT_CAPACITY : ARRAY_CAPACITY_GROW(ARRAY_SIZE(P)));      \
-         if (ARRAY_SIZE(P) >= ARRAY_CAPACITY(P)) C_ARRAY_UTIL_ALLOCATION_FAILED(); \
-    }                                                                              \
-    *((P) + ARRAY_SIZE(P)) = (__VA_ARGS__);                                        \
-    ARRAY_T(P)->size++;                                                            \
-} while(0)
+#define ARRAY_PUSH_BACK(P) \
+    (*(CARR_array_push_back((void**)&(P), alignof(*(P)), sizeof(*(P))), (P) + ARRAY_SIZE(P) - 1))
 
+/**
+ * Compile-time length of the static array.
+ */
 #define SARRAY_COUNT_OF(STATIC_ARRAY) (sizeof(STATIC_ARRAY)/sizeof((STATIC_ARRAY)[0]))
 
 // === Ring buffers ===
@@ -172,89 +211,132 @@ typedef struct {
     size_t head;
     size_t tail;
     size_t capacity;
-    char data[];
 } CARR_ring_buffer_t;
-void* CARR_ring_buffer_realloc(void* old_data, size_t element_alignment, size_t element_size, size_t new_capacity);
-// NULL unsafe!
-#define RING_BUFFER_T(P) ((CARR_ring_buffer_t *)((char*)(P) - offsetof(CARR_ring_buffer_t, data)))
+
+bool CARR_ring_buffer_realloc(void** handle, size_t element_alignment, size_t element_size, size_t new_capacity);
+
+#define CARR_RING_BUFFER_T(P) ((CARR_ring_buffer_t*)(P) - 1) // NULL / type unsafe!
+#define CARR_RING_BUFFER_IS_NULL(P) (&(P)->CARR_elem == NULL) // Guard against wrong pointer types.
+#define CARR_RING_BUFFER_GUARD(P, ...) (consume(&(P)->CARR_elem), __VA_ARGS__) // Guard against wrong pointer types.
+
+static inline size_t CARR_ring_buffer_size(void* data) {
+    CARR_ring_buffer_t* buffer = CARR_RING_BUFFER_T(data);
+    return (buffer->capacity + buffer->tail - buffer->head) % buffer->capacity;
+}
+
+static inline bool CARR_ring_buffer_ensure_can_push(void** handle, size_t alignment, size_t size, bool force) {
+    void* data = *handle;
+    if (data == NULL || CARR_ring_buffer_size(data) + 1 >= CARR_RING_BUFFER_T(data)->capacity) {
+        size_t new_capacity = data == NULL ?
+            ARRAY_DEFAULT_CAPACITY : ARRAY_CAPACITY_GROW(CARR_RING_BUFFER_T(data)->capacity);
+        return CARR_handle_alloc(CARR_ring_buffer_realloc(handle, alignment, size, new_capacity), force);
+    }
+    return true;
+}
+
+static inline size_t CARR_ring_buffer_push_front(void* data) {
+    if (data == NULL) return 0;
+    CARR_ring_buffer_t* buffer = CARR_RING_BUFFER_T(data);
+    return buffer->head = (buffer->head + buffer->capacity - 1) % buffer->capacity;
+}
+
+static inline size_t CARR_ring_buffer_push_back(void* data) {
+    if (data == NULL) return 0;
+    CARR_ring_buffer_t* buffer = CARR_RING_BUFFER_T(data);
+    size_t i = buffer->tail;
+    buffer->tail = (buffer->tail + 1) % buffer->capacity;
+    return i;
+}
 
 /**
- * @param P pointer to the first data element of the ring buffer
+ * Ring buffer declaration, e.g. RING_BUFFER(int) my_ring = NULL;
+ * @param TYPE type of the ring buffer element.
+ */
+#define RING_BUFFER(TYPE) struct { TYPE CARR_elem; }*
+
+/**
+ * @param P ring buffer
  * @return size of the ring buffer
  */
-#define RING_BUFFER_SIZE(P) ((P) == NULL ? (size_t) 0 : \
-    (RING_BUFFER_T(P)->capacity + RING_BUFFER_T(P)->tail - RING_BUFFER_T(P)->head) % RING_BUFFER_T(P)->capacity)
+#define RING_BUFFER_SIZE(P) (CARR_RING_BUFFER_IS_NULL(P) ? (size_t) 0 : CARR_ring_buffer_size(P))
 
 /**
- * @param P pointer to the first data element of the ring buffer
+ * @param P ring buffer
  * @return capacity of the ring buffer
  */
-#define RING_BUFFER_CAPACITY(P) ((P) == NULL ? (size_t) 0 : RING_BUFFER_T(P)->capacity)
+#define RING_BUFFER_CAPACITY(P) (CARR_RING_BUFFER_IS_NULL(P) ? (size_t) 0 : CARR_RING_BUFFER_T(P)->capacity)
+
+/**
+ * Ensure enough capacity to push an element into ring buffer. Implicitly initializes when buffer is NULL.
+ * On allocation failure, buffer is left unchanged.
+ * @param P ring buffer
+ * @return true if the operation succeeded
+ */
+#define RING_BUFFER_TRY_ENSURE_CAN_PUSH(P) CARR_RING_BUFFER_GUARD((P), \
+    CARR_ring_buffer_ensure_can_push((void**)&(P), alignof(*(P)), sizeof(*(P)), false))
 
 /**
  * Ensure enough capacity to push an element into ring buffer. Implicitly initializes when buffer is NULL.
  * On allocation failure, C_ARRAY_UTIL_ALLOCATION_FAILED is called.
- * @param P pointer to the first data element of the buffer
+ * @param P ring buffer
  */
-#define RING_BUFFER_ENSURE_CAN_PUSH(P) do {                                            \
-    if (RING_BUFFER_SIZE(P) + 1 >= RING_BUFFER_CAPACITY(P))                            \
-        (P) = CARR_REALLOC(CARR_ring_buffer_realloc, (P), (P) == NULL ?                \
-            ARRAY_DEFAULT_CAPACITY : ARRAY_CAPACITY_GROW(RING_BUFFER_T(P)->capacity)); \
-    if ((P) == NULL) C_ARRAY_UTIL_ALLOCATION_FAILED();                                 \
-} while(0)
+#define RING_BUFFER_ENSURE_CAN_PUSH(P) CARR_RING_BUFFER_GUARD((P), \
+    (void)CARR_ring_buffer_ensure_can_push((void**)&(P), alignof(*(P)), sizeof(*(P)), true))
 
 /**
  * Add element to the beginning of the ring buffer. Implicitly initializes when buffer is NULL.
  * On allocation failure, C_ARRAY_UTIL_ALLOCATION_FAILED is called.
- * @param P pointer to the first data element of the buffer
+ * @param P ring buffer
+ * @return dereferenced pointer to the inserted element
  */
-#define RING_BUFFER_PUSH_FRONT(P, ...) do {                                                                          \
-    RING_BUFFER_ENSURE_CAN_PUSH(P);                                                                                  \
-    RING_BUFFER_T(P)->head = (RING_BUFFER_T(P)->head + RING_BUFFER_T(P)->capacity - 1) % RING_BUFFER_T(P)->capacity; \
-    (P)[RING_BUFFER_T(P)->head] = (__VA_ARGS__);                                                                     \
-} while(0)
+#define RING_BUFFER_PUSH_FRONT(P) \
+    ((RING_BUFFER_ENSURE_CAN_PUSH(P), (P) + CARR_ring_buffer_push_front(P))->CARR_elem)
 
 /**
  * Add element to the end of the ring buffer. Implicitly initializes when buffer is NULL.
  * On allocation failure, C_ARRAY_UTIL_ALLOCATION_FAILED is called.
- * @param P pointer to the first data element of the buffer
+ * @param P ring buffer
+ * @return dereferenced pointer to the inserted element
  */
-#define RING_BUFFER_PUSH_BACK(P, ...) do {                                              \
-    RING_BUFFER_ENSURE_CAN_PUSH(P);                                                     \
-    (P)[RING_BUFFER_T(P)->tail] = (__VA_ARGS__);                                        \
-    RING_BUFFER_T(P)->tail = (RING_BUFFER_T(P)->tail + 1) % RING_BUFFER_T(P)->capacity; \
-} while(0)
+#define RING_BUFFER_PUSH_BACK(P) \
+    ((RING_BUFFER_ENSURE_CAN_PUSH(P), (P) + CARR_ring_buffer_push_back(P))->CARR_elem)
 
 /**
  * Get pointer to the first element of the ring buffer.
- * @param P pointer to the first data element of the buffer
+ * @param P ring buffer
+ * @return pointer to the first element of the ring buffer, or NULL
  */
-#define RING_BUFFER_FRONT(P) ((P) == NULL || RING_BUFFER_T(P)->head == RING_BUFFER_T(P)->tail ? NULL : &(P)[RING_BUFFER_T(P)->head])
+#define RING_BUFFER_FRONT(P) (CARR_RING_BUFFER_IS_NULL(P) || \
+    CARR_RING_BUFFER_T(P)->head == CARR_RING_BUFFER_T(P)->tail ? NULL : &(P)[CARR_RING_BUFFER_T(P)->head].CARR_elem)
 
 /**
  * Get pointer to the last element of the ring buffer.
- * @param P pointer to the first data element of the buffer
+ * @param P ring buffer
+ * @return pointer to the last element of the ring buffer, or NULL
  */
-#define RING_BUFFER_BACK(P) ((P) == NULL || RING_BUFFER_T(P)->head == RING_BUFFER_T(P)->tail ? NULL : \
-    &(P)[(RING_BUFFER_T(P)->tail + RING_BUFFER_T(P)->capacity - 1) % RING_BUFFER_T(P)->capacity])
+#define RING_BUFFER_BACK(P) (CARR_RING_BUFFER_IS_NULL(P) ||             \
+    CARR_RING_BUFFER_T(P)->head == CARR_RING_BUFFER_T(P)->tail ? NULL : \
+    &(P)[(CARR_RING_BUFFER_T(P)->tail+CARR_RING_BUFFER_T(P)->capacity-1) % CARR_RING_BUFFER_T(P)->capacity].CARR_elem)
 
 /**
  * Move beginning of the ring buffer forward (remove first element).
- * @param P pointer to the first data element of the buffer
+ * @param P ring buffer
  */
-#define RING_BUFFER_POP_FRONT(P) RING_BUFFER_T(P)->head = (RING_BUFFER_T(P)->head + 1) % RING_BUFFER_T(P)->capacity
+#define RING_BUFFER_POP_FRONT(P) CARR_RING_BUFFER_GUARD((P), (void)(CARR_RING_BUFFER_T(P)->head = \
+    (CARR_RING_BUFFER_T(P)->head + 1) % CARR_RING_BUFFER_T(P)->capacity))
 
 /**
  * Move end of the ring buffer backward (remove last element).
- * @param P pointer to the first data element of the buffer
+ * @param P ring buffer
  */
-#define RING_BUFFER_POP_BACK(P) \
-    RING_BUFFER_T(P)->tail = (RING_BUFFER_T(P)->tail + RING_BUFFER_T(P)->capacity - 1) % RING_BUFFER_T(P)->capacity
+#define RING_BUFFER_POP_BACK(P) CARR_RING_BUFFER_GUARD((P), (void)(CARR_RING_BUFFER_T(P)->tail = \
+    (CARR_RING_BUFFER_T(P)->tail + CARR_RING_BUFFER_T(P)->capacity - 1) % CARR_RING_BUFFER_T(P)->capacity))
 
 /**
  * Deallocate the ring buffer
- * @param P pointer to the first data element of the buffer
+ * @param P ring buffer
  */
-#define RING_BUFFER_FREE(P) CARR_REALLOC(CARR_ring_buffer_realloc, (P), 0)
+#define RING_BUFFER_FREE(P) CARR_RING_BUFFER_GUARD((P), \
+    (void)CARR_ring_buffer_realloc((void**)&(P), alignof(*(P)), sizeof(*(P)), 0))
 
 #endif // C_ARRAY_UTIL_H

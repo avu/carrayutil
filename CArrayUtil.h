@@ -339,4 +339,166 @@ static inline size_t CARR_ring_buffer_push_back(void* data) {
 #define RING_BUFFER_FREE(P) CARR_RING_BUFFER_GUARD((P), \
     (void)CARR_ring_buffer_realloc((void**)&(P), alignof(*(P)), sizeof(*(P)), 0))
 
+// === Maps ===
+
+typedef bool (*CARR_equals_fp)(const void* a, const void* b);
+typedef size_t (*CARR_hash_fp)(const void* data);
+
+#define CARR_MAP_LAYOUT_ARGS size_t key_alignment, size_t key_size, size_t value_alignment, size_t value_size
+#define CARR_MAP_LAYOUT_PASS key_alignment, key_size, value_alignment, value_size
+#define CARR_MAP_LAYOUT(P)                                                         \
+    alignof((P)->CARR_keys[0].CARR_key[0]), sizeof((P)->CARR_keys[0].CARR_key[0]), \
+    alignof((P)->CARR_values[0].CARR_value[0]), sizeof((P)->CARR_values[0].CARR_value[0])
+
+typedef const void* (*CARR_map_dispatch_next_key_fp)(CARR_MAP_LAYOUT_ARGS, const void* data, const void* key_slot);
+typedef void* (*CARR_map_dispatch_find_fp)(CARR_MAP_LAYOUT_ARGS,
+                                           void* data, const void* key, const void** resolved_key, bool insert);
+typedef bool (*CARR_map_dispatch_remove_fp)(CARR_MAP_LAYOUT_ARGS, void* data, const void* key);
+typedef bool (*CARR_map_dispatch_ensure_extra_capacity_fp)(CARR_MAP_LAYOUT_ARGS, void** handle, size_t count);
+typedef void (*CARR_map_dispatch_clear_fp)(CARR_MAP_LAYOUT_ARGS, void* data);
+typedef void (*CARR_map_dispatch_free_fp)(CARR_MAP_LAYOUT_ARGS, void* data);
+
+typedef struct {
+    CARR_map_dispatch_next_key_fp next_key;
+    CARR_map_dispatch_find_fp find;
+    CARR_map_dispatch_remove_fp remove;
+    CARR_map_dispatch_ensure_extra_capacity_fp ensure_extra_capacity;
+    CARR_map_dispatch_clear_fp clear;
+    CARR_map_dispatch_free_fp free;
+} CARR_map_dispatch_t;
+
+#define CARR_MAP_KEY_PTR(P, ...) \
+    (&((true ? NULL : (P))->CARR_keys[((uintptr_t)(__VA_ARGS__) / sizeof((P)->CARR_keys[0]) - 1)].CARR_key[0]))
+#define CARR_MAP_VALUE_PTR(P, ...) \
+    (&((true ? NULL : (P))->CARR_values[((uintptr_t)(__VA_ARGS__) / sizeof((P)->CARR_values[0]) - 1)].CARR_value[0]))
+#define CARR_MAP_KEY_GUARD(P, ...) \
+    (true ? (__VA_ARGS__) : &(P)->CARR_keys[0].CARR_key[0]) // Guard against wrong key types.
+#define CARR_MAP_DISPATCH(P, NAME, ...) \
+    (((const CARR_map_dispatch_t**)(P))[-1]->NAME(CARR_MAP_LAYOUT(P), __VA_ARGS__))
+
+bool CARR_hash_map_linear_probing_rehash(CARR_MAP_LAYOUT_ARGS, void** handle, CARR_equals_fp equals, CARR_hash_fp hash,
+                                         size_t new_capacity, uint32_t probing_limit, float load_factor);
+
+/**
+ * Map declaration, e.g. MAP(int, int) my_map = NULL;
+ * Map must be explicitly initialized before usage, e.g. via HASH_MAP_REHASH.
+ * @param KEY_TYPE type of the map key.
+ * @param VALUE_TYPE type of the map value.
+ */
+#define MAP(KEY_TYPE, VALUE_TYPE) union {                                \
+    struct { char CARR_dummy; const KEY_TYPE CARR_key[]; } CARR_keys[1]; \
+    struct { char CARR_dummy; VALUE_TYPE CARR_value[]; } CARR_values[1]; \
+}*
+
+/**
+ * Rehash a hash map with given strategy. It will be initialized if NULL.
+ * On allocation failure, C_ARRAY_UTIL_ALLOCATION_FAILED is called.
+ * List of available strategies with accepted parameters and sensible defaults:
+ * 1. linear_probing (size_t initial_capacity = 0, float load_factor = 0.75) TODO
+ * @param P map
+ * @param STRATEGY strategy to use
+ */
+#define HASH_MAP_REHASH(P, STRATEGY, ...) \
+    ((void)CARR_handle_alloc(CARR_hash_map_##STRATEGY##_rehash(CARR_MAP_LAYOUT(P), (void**)&(P), __VA_ARGS__), true))
+
+/**
+ * Rehash a hash map with given strategy. It will be initialized if NULL.
+ * On allocation failure, map is left unchanged.
+ * For list of available strategies see HASH_MAP_REHASH.
+ * @param P map
+ * @param STRATEGY strategy to use
+ * @return true if the operation succeeded
+ */
+#define HASH_MAP_TRY_REHASH(P, STRATEGY, ...) \
+    (CARR_hash_map_##STRATEGY##_rehash(CARR_MAP_LAYOUT(P), (void**)&(P), __VA_ARGS__))
+
+/**
+ * Find the next resolved key present in the map, or NULL.
+ * Enumeration order is implementation-defined.
+ * @param P map
+ * @param KEY_PTR pointer to the current resolved key, or NULL
+ * @return pointer to the next resolved key
+ */
+#define MAP_NEXT_KEY(P, KEY_PTR) \
+    CARR_MAP_KEY_PTR((P), CARR_MAP_DISPATCH((P), next_key, (P), CARR_MAP_KEY_GUARD((P), (KEY_PTR))))
+
+/**
+ * Find a value for the provided key.
+ * @param P map
+ * @param KEY key to find, can be a compound literal, like (int){0}
+ * @return pointer to the found value, or NULL
+ */
+#define MAP_FIND(P, KEY) \
+    CARR_MAP_VALUE_PTR((P), CARR_MAP_DISPATCH((P), find, (P), CARR_MAP_KEY_GUARD((P), &(KEY)), NULL, false))
+
+/**
+ * Find a value for the provided key, or insert a new one.
+ * Value is zeroed for newly inserted items.
+ * On allocation failure, C_ARRAY_UTIL_ALLOCATION_FAILED is called.
+ * @param P map
+ * @param KEY key to find, can be a compound literal, like (int){0}
+ * @return dereferenced pointer to the found value
+ */
+#define MAP_AT(P, KEY) (*(MAP_ENSURE_EXTRA_CAPACITY((P), 1), \
+    CARR_MAP_VALUE_PTR((P), CARR_MAP_DISPATCH((P), find, (P), CARR_MAP_KEY_GUARD((P), &(KEY)), NULL, true))))
+
+/**
+ * Resolve provided key and find corresponding value.
+ * Using resolved key addresses speeds up subsequent map operations.
+ * @param P map
+ * @param KEY_PTR pointer to the key to find, replaced with resolved key address, or NULL
+ * @return pointer to the found value, or NULL
+ */
+#define MAP_RESOLVE(P, KEY_PTR) CARR_MAP_VALUE_PTR((P), \
+    CARR_MAP_DISPATCH((P), find, (P), CARR_MAP_KEY_GUARD((P), (KEY_PTR)), (const void**) &(KEY_PTR), false))
+
+/**
+ * Resolve provided key and find corresponding value, or insert a new one.
+ * Using resolved key addresses speeds up subsequent map operations.
+ * Returned value pointer may be NULL, indicating that the entry was just inserted, use MAP_FIND or MAP_AT to access it.
+ * On allocation failure, map is left unchanged.
+ * @param P map
+ * @param KEY_PTR pointer to the key to find, replaced with resolved key address
+ * @return pointer to the found value, or NULL
+ */
+#define MAP_RESOLVE_OR_INSERT(P, KEY_PTR) (MAP_TRY_ENSURE_EXTRA_CAPACITY((P), 1), CARR_MAP_VALUE_PTR((P), \
+    CARR_MAP_DISPATCH((P), find, (P), CARR_MAP_KEY_GUARD((P), (KEY_PTR)), (const void**) &(KEY_PTR), true)))
+
+/**
+ * Remove the provided key, if one exists.
+ * @param P map
+ * @param KEY key to remove, can be a compound literal, like (int){0}
+ * @return true if the key was removed
+ */
+#define MAP_REMOVE(P, KEY) CARR_MAP_DISPATCH((P), remove, (P), CARR_MAP_KEY_GUARD((P), &(KEY)))
+
+/**
+ * Ensure that map has enough capacity to insert COUNT more items without reallocation.
+ * On allocation failure, C_ARRAY_UTIL_ALLOCATION_FAILED is called.
+ * @param P map
+ * @param COUNT number of new items
+ */
+#define MAP_ENSURE_EXTRA_CAPACITY(P, COUNT) ((void)CARR_handle_alloc(MAP_TRY_ENSURE_EXTRA_CAPACITY((P), (COUNT)), true))
+
+/**
+ * Ensure that map has enough capacity to insert COUNT more items without reallocation.
+ * On allocation failure, map is left unchanged.
+ * @param P map
+ * @param COUNT number of new items
+ * @return true if the operation succeeded
+ */
+#define MAP_TRY_ENSURE_EXTRA_CAPACITY(P, COUNT) CARR_MAP_DISPATCH((P), ensure_extra_capacity, (void**)&(P), (COUNT))
+
+/**
+ * Clear the map.
+ * @param P map
+ */
+#define MAP_CLEAR(P) CARR_MAP_DISPATCH((P), clear, (P))
+
+/**
+ * Free the map.
+ * @param P map
+ */
+#define MAP_FREE(P) (CARR_MAP_DISPATCH((P), free, (P)), (void)((P) = NULL))
+
 #endif // C_ARRAY_UTIL_H

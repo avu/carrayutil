@@ -6,6 +6,16 @@ static bool alloc_failed = false;
 
 #include "test.h"
 
+typedef MAP(int, int) map_t;
+static void safe_map_rehash(map_t* map) {
+    bool result = HASH_MAP_TRY_REHASH(*map, linear_probing, NULL, NULL, 0, -1, 1.0);
+    if (!result) fail();
+}
+static void safe_map_free(map_t* map) {
+    MAP_FREE(*map);
+    *map = NULL;
+}
+
 // Providing invalid alignment helps to make allocation fail.
 #ifdef alignof
 #undef alignof
@@ -58,8 +68,28 @@ static void test_alloc_fail_ring_buffer() {
     expect_alloc_fail(false);
 }
 
+static void test_alloc_fail_map() {
+    map_t map = NULL;
+    bool try_result;
+
+    try_result = HASH_MAP_TRY_REHASH(map, linear_probing, NULL, NULL, 0, -1, 1.0);
+    if (try_result) fail();
+    expect_alloc_fail(false);
+    HASH_MAP_REHASH(map, linear_probing, NULL, NULL, 0, -1, 1.0);
+    expect_alloc_fail(true);
+
+    safe_map_rehash(&map);
+    try_result = MAP_TRY_ENSURE_EXTRA_CAPACITY(map, 1000);
+    if (try_result) fail();
+    expect_alloc_fail(false);
+    MAP_ENSURE_EXTRA_CAPACITY(map, 1000);
+    expect_alloc_fail(true);
+    safe_map_free(&map);
+}
+
 void test_alloc_fail() {
     alloc_failed = false;
     RUN_TEST(alloc_fail_array);
     RUN_TEST(alloc_fail_ring_buffer);
+    RUN_TEST(alloc_fail_map);
 }

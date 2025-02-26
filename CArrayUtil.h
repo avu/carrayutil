@@ -394,9 +394,16 @@ bool CARR_hash_map_linear_probing_rehash(CARR_MAP_LAYOUT_ARGS, void** handle, CA
  * Rehash a hash map with given strategy. It will be initialized if NULL.
  * On allocation failure, C_ARRAY_UTIL_ALLOCATION_FAILED is called.
  * List of available strategies with accepted parameters and sensible defaults:
- * 1. linear_probing (size_t initial_capacity = 0, float load_factor = 0.75) TODO
+ * 1. linear_probing (
+ *      CARR_equals_fp equals,  // Key comparison function.
+ *      CARR_hash_fp hash,      // Key hash calculation function.
+ *      size_t new_capacity,    // New (min) capacity, must not be less than current number of items. Can be 0.
+ *      uint32_t probing_limit, // Search length, triggering rehash. Must not be too low, around 10 should be fine?
+ *      float load_factor       // Min load factor needed to allow rehash triggered by probing_limit. 0.75 is fine.
+ *    )
  * @param P map
  * @param STRATEGY strategy to use
+ * @param ... parameters for the rehash strategy
  */
 #define HASH_MAP_REHASH(P, STRATEGY, ...) \
     ((void)CARR_handle_alloc(CARR_hash_map_##STRATEGY##_rehash(CARR_MAP_LAYOUT(P), (void**)&(P), __VA_ARGS__), true))

@@ -121,25 +121,25 @@ static size_t CARR_hash_map_find_size(const size_t* table, unsigned int table_le
 // Check whether memory chunk is non-zero.
 static bool CARR_check_range(const void* p, size_t alignment, size_t size) {
     switch (alignment) {
-        case sizeof(u_int8_t):
-        case sizeof(u_int16_t):{
-                const u_int8_t* data = p;
+        case sizeof(uint8_t):
+        case sizeof(uint16_t):{
+                const uint8_t* data = p;
                 for (size_t i = 0; i < size; i++) {
-                    if (data[i] != (u_int8_t) 0) return true;
+                    if (data[i] != (uint8_t) 0) return true;
                 }
         }break;
-        case sizeof(u_int32_t):{
+        case sizeof(uint32_t):{
                 size >>= 2;
-                const u_int32_t* data = p;
+                const uint32_t* data = p;
                 for (size_t i = 0; i < size; i++) {
-                    if (data[i] != (u_int32_t) 0) return true;
+                    if (data[i] != (uint32_t) 0) return true;
                 }
         }break;
         default:{
                 size >>= 3;
-                const u_int64_t* data = p;
+                const uint64_t* data = p;
                 for (size_t i = 0; i < size; i++) {
-                    if (data[i] != (u_int64_t) 0) return true;
+                    if (data[i] != (uint64_t) 0) return true;
                 }
         }break;
     }

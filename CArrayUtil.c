@@ -1,4 +1,5 @@
 #include <memory.h>
+#include <stddef.h>
 #include "CArrayUtil.h"
 
 #if defined(_MSC_VER)

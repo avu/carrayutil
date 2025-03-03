@@ -506,6 +506,6 @@ bool CARR_hash_map_linear_probing_rehash(CARR_MAP_LAYOUT_ARGS, void** handle, CA
  * Free the map.
  * @param P map
  */
-#define MAP_FREE(P) (CARR_MAP_DISPATCH((P), free, (P)), (void)((P) = NULL))
+#define MAP_FREE(P) ((P) == NULL ? 0 : CARR_MAP_DISPATCH((P), free, (P)), (void)((P) = NULL))
 
 #endif // C_ARRAY_UTIL_H

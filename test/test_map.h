@@ -164,6 +164,9 @@ static void test_map_linear_probing() {
 
     MAP_FREE(map);
     if (map != NULL) fail();
+
+    // Freeing must be NULL-safe
+    MAP_FREE(map);
 }
 
 #undef map_key_t
